@@ -1,4 +1,4 @@
-﻿from PyQt5.QtGui import QCursor, QIcon, QPixmap
+from PyQt5.QtGui import QCursor, QIcon, QPixmap
 import markdown
 from PyQt5.QtWidgets import (QApplication, QComboBox, QMainWindow, QMenu, QScrollArea, QSplashScreen, 
                            QSystemTrayIcon, QWidget, QTextEdit, QPushButton, QLabel, 
@@ -90,6 +90,10 @@ class ChatManager:
         self.chats_metadata = {}
         self._initialize_directories()
         self._load_chats_metadata()
+        
+        # Initialize first chat if no chats exist
+        if not self.chats_metadata:
+            self.create_new_chat()
 
     def _get_app_data_dir(self):
         """Get the appropriate application data directory based on the OS."""
@@ -143,7 +147,7 @@ class ChatManager:
             json.dump({'messages': []}, f)
         
         self._save_chats_metadata()
-        self.active_chat_id = chat_id
+        self.active_chat_id = chat_id  # Set as active chat
         return chat_id, self.chats_metadata[chat_id]['title']
 
     def load_chat(self, chat_id):
@@ -1207,26 +1211,29 @@ class MainWindow(QMainWindow):
         return text
 
     def send_message(self):
+        """Handle sending a new message"""
         message = self.chat_input.toPlainText().strip()
         if not message:
             return
 
-        # Check if this is the first message in a fresh chat
-        is_new_chat = len(self.chat_manager.chats_metadata[self.chat_manager.active_chat_id]['messages']) == 0
-        
-        # Format and display message
+        # If no active chat exists, create a new one FIRST
+        if self.chat_manager.active_chat_id is None:
+            self.create_new_chat()  # This sets up everything we need for a new chat
+
+        # Now we can safely proceed with sending the message
         formatted_message = self.format_user_message(message)
         self.chat_display.append(formatted_message)
-    
+
         # Save message to chat manager
         self.chat_manager.save_message('user', message)
-    
+
         # Update message history and clear input
         self.message_history.append({'role': 'user', 'content': message})
         self.chat_input.clear()
         self.send_button.setEnabled(False)
 
-        # If this is the first message, generate title using Qwen
+        # If this is the first message in this chat, generate a title
+        is_new_chat = len(self.chat_manager.chats_metadata[self.chat_manager.active_chat_id]['messages']) == 1
         if is_new_chat:
             try:
                 messages = [{
@@ -1245,28 +1252,27 @@ class MainWindow(QMainWindow):
                     'content': message
                 }]
 
-                # Get title from Qwen model
+                # Get title from model
                 response = ollama.chat(model='qwen2.5:3b', messages=messages)
                 title = response['message']['content'].strip()
-            
+
                 # Clean up the title
                 title = re.sub(r'["\']', '', title)  # Remove quotes
                 title = re.sub(r'^(Chat about|Discussion of|About)\s*', '', title, flags=re.IGNORECASE)
                 title = title[:40]  # Truncate if too long
 
-                # Update chat title in both manager and UI
+                # Update chat title
                 self.chat_manager.update_chat_title(self.chat_manager.active_chat_id, title)
                 if self.chat_history_panel and self.chat_manager.active_chat_id in self.chat_history_panel.chat_buttons:
                     self.chat_history_panel.chat_buttons[self.chat_manager.active_chat_id].setText(f"  {title}")
 
             except Exception as e:
                 print(f"Error generating title: {str(e)}")
-                # If title generation fails, use timestamp as fallback
                 fallback_title = f"New Chat {datetime.now().strftime('%H:%M')}"
                 self.chat_manager.update_chat_title(self.chat_manager.active_chat_id, fallback_title)
                 if self.chat_history_panel and self.chat_manager.active_chat_id in self.chat_history_panel.chat_buttons:
                     self.chat_history_panel.chat_buttons[self.chat_manager.active_chat_id].setText(f"  {fallback_title}")
-    
+
         # Send to chat worker for response
         self.chat_worker.set_prompt(message, self.message_history)
         self.chat_worker.start()
@@ -1358,6 +1364,6 @@ if __name__ == "__main__":
         splash.close()
         window.show()
     
-    QTimer.singleShot(2000, show_main_window)
+    QTimer.singleShot(2000, show_main_window) # timer for splash-screen
     
     sys.exit(app.exec_())
